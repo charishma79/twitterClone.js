@@ -1,16 +1,18 @@
 const express = require("express");
-const app = express();
 
 const sqlite3 = require("sqlite3");
 const { open } = require("sqlite");
 
 const path = require("path");
 const dbPath = path.join(__dirname, "twitterClone.db");
+const app = express();
+app.use(express.json());
 
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-app.use(express.json());
+
 let db = null;
+
 const initializeDBAndServer = async () => {
   try {
     db = await open({
@@ -168,15 +170,23 @@ app.get("/tweets/:tweetId/", authenticateToken, async (request, response) => {
   if (
     userFollowers.some((item) => item.following_user_id === tweetResult.user_id)
   ) {
-    const getTweetQuery = `
-        SELECT tweet.tweet,COUNT(like.like_id) AS likes,
-        COUNT(reply.reply_id) AS replies,tweet.date_time AS dateTime
-        FROM 
-        tweet INNER JOIN like ON tweet.tweet_id=like.tweet_id
-         INNER JOIN reply ON reply.tweet_id=like.tweet_id
-            WHERE tweet.tweet_id='${tweetId}';`;
-    const getQueryResponse = await db.get(getTweetQuery);
-    response.send(getQueryResponse);
+    const { tweet_id, date_time, tweet } = tweetResult;
+    const getLikesQuery = `
+        SELECT COUNT(like_id) AS likes FROM like
+        WHERE tweet_id=${tweet_id}
+        GROUP BY tweet_id`;
+    const likesObject = await db.get(getLikesQuery);
+    const getRepliesQuery = `
+        SELECT COUNT(reply_id) AS replies FROM reply
+        WHERE tweet_id=${tweet_id}
+        GROUP BY tweet_id`;
+    const repliesObject = await db.get(getRepliesQuery);
+    response.send({
+      tweet,
+      likes: likesObject.likes,
+      replies: repliesObject.replies,
+      dateTime: date_time,
+    });
   } else {
     response.status(401);
     response.send("Invalid Request");
@@ -200,6 +210,7 @@ app.get(
         FROM tweet
         WHERE tweet_id=${tweetId};`;
     const tweetResult = await db.get(tweetsQuery);
+    console.log(tweetResult);
     const userFollowersQuery = `
                 SELECT
                 *
@@ -214,26 +225,33 @@ app.get(
       )
     ) {
       const getLikedTweetQuery = `
-        SELECT user.name
-        FROM user NATURAL JOIN like
-        WHERE like.tweet_id=${tweetId}
-        AND user.user_id=like.user_id;`;
-      const getTweetLikedQueryResponse = await db.get(getLikedTweetQuery);
-      response.send({
-        likes: [getTweetLikedQueryResponse.name],
-      });
+        SELECT  user.username
+        FROM user NATURAL JOIN like 
+        WHERE like.tweet_id=${tweetId}`;
+      const getTweetLikedQueryResponse = await db.all(getLikedTweetQuery);
+      let newArr = [];
+      for (let i = 0; i < getTweetLikedQueryResponse.length; i++) {
+        let name_text = getTweetLikedQueryResponse[i];
+        newArr.push(name_text.username);
+      }
+
+      console.log(newArr);
+
+      response.send({ likes: newArr });
     } else {
       response.status(401);
       response.send("Invalid Request");
     }
   }
 );
+
 //API 8
 app.get(
   "/tweets/:tweetId/replies/",
   authenticateToken,
   async (request, response) => {
     const { tweetId } = request.params;
+
     const username = request.username;
     const loginId = `SELECT * FROM user WHERE username='${username}';`;
     const idOfLoggedInUser = await db.get(loginId);
@@ -279,14 +297,16 @@ app.get("/user/tweets/", authenticateToken, async (request, response) => {
   const idOfLoggedInUser = await db.get(loginId);
   const loginUserId = idOfLoggedInUser.user_id;
   //console.log(loginUserId);
-  const getTweetUserQuery = `SELECT tweet.tweet,COUNT(like.like_id) AS likes,
-                        COUNT(reply.reply_id) AS replies,
-                        tweet.date_time AS dateTime
-                        FROM tweet INNER JOIN like ON tweet.tweet_id=like.tweet_id
-                        INNER JOIN reply ON like.tweet_id=reply.tweet_id
-                        WHERE tweet.user_id=${loginUserId};`;
-  const getTweetUsersResponse = await db.all(getTweetUserQuery);
-  response.send(getTweetUsersResponse);
+  const getUserTweetsResponse = `SELECT tweet.tweet,COUNT(DISTINCT like.like_id) AS likes,COUNT(DISTINCT reply.reply_id) AS replies,
+                                    tweet.date_time AS dateTime
+                                    FROM tweet
+                                    INNER JOIN like ON tweet.tweet_id=like.tweet_id
+                                    INNER JOIN  reply ON like.tweet_id=reply.tweet_id
+                                    
+                                    WHERE tweet.user_id=${loginUserId} GROUP BY tweet.tweet_id`;
+
+  const tweetsResponse = await db.all(getUserTweetsResponse);
+  response.send(tweetsResponse);
 });
 
 //Create a tweet in the tweet table
